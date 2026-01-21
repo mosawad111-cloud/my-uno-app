@@ -1,0 +1,5 @@
+{
+  "name": "UNO Multiplayer Pro",
+  "description": "A high-performance real-time multiplayer UNO game built with React, Tailwind CSS, and Firebase Firestore for seamless gameplay and synchronization.",
+  "requestFramePermissions": []
+}
