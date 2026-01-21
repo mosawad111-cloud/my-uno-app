@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect } from 'react';
-import { db } from './firebase';
+import { db } from './firebase.js';
 import { 
   doc, 
   setDoc, 
@@ -8,12 +7,12 @@ import {
   updateDoc, 
   getDoc 
 } from 'firebase/firestore';
-import { GameState, Player, CardColor } from './types';
-import { createFullDeck, AVATARS } from './constants';
-import { canPlayCard, getNextTurnIndex, shuffle } from './gameLogic';
-import Lobby from './components/Lobby';
-import GameBoard from './components/GameBoard';
-import MusicPlayer from './components/MusicPlayer';
+import { GameState, Player, CardColor } from './types.js';
+import { createFullDeck, AVATARS } from './constants.js';
+import { canPlayCard, getNextTurnIndex, shuffle } from './gameLogic.js';
+import Lobby from './components/Lobby.js';
+import GameBoard from './components/GameBoard.js';
+import MusicPlayer from './components/MusicPlayer.js';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<{ id: string; name: string; avatarUrl: string } | null>(null);
