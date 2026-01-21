@@ -6,32 +6,33 @@ import {
   setDoc, 
   onSnapshot, 
   updateDoc, 
-  collection, 
   getDoc 
 } from 'firebase/firestore';
-import { GameState, Player, Card, CardColor } from './types';
-import { createFullDeck } from './constants';
+import { GameState, Player, CardColor } from './types';
+import { createFullDeck, AVATARS } from './constants';
 import { canPlayCard, getNextTurnIndex, shuffle } from './gameLogic';
 import Lobby from './components/Lobby';
 import GameBoard from './components/GameBoard';
+import MusicPlayer from './components/MusicPlayer';
 
 const App: React.FC = () => {
-  const [user, setUser] = useState<{ id: string; name: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; name: string; avatarUrl: string } | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasStarted, setHasStarted] = useState(false);
 
-  // Initialize unique user ID
   useEffect(() => {
     const savedId = localStorage.getItem('uno_player_id');
     const id = savedId || Math.random().toString(36).substr(2, 9);
     if (!savedId) localStorage.setItem('uno_player_id', id);
     
     const savedName = localStorage.getItem('uno_player_name') || `Player_${id.substr(0, 4)}`;
-    setUser({ id, name: savedName });
+    const savedAvatar = localStorage.getItem('uno_player_avatar') || AVATARS[Math.floor(Math.random() * AVATARS.length)];
+    
+    setUser({ id, name: savedName, avatarUrl: savedAvatar });
   }, []);
 
-  // Listen for game state updates
   useEffect(() => {
     if (!roomId) return;
 
@@ -39,7 +40,7 @@ const App: React.FC = () => {
       if (docSnap.exists()) {
         setGameState(docSnap.data() as GameState);
       } else {
-        setError('Room not found');
+        setError('Room closed');
         setRoomId(null);
       }
     });
@@ -47,9 +48,16 @@ const App: React.FC = () => {
     return () => unsub();
   }, [roomId]);
 
+  const handleAvatarChange = (url: string) => {
+    if (!user) return;
+    const updatedUser = { ...user, avatarUrl: url };
+    setUser(updatedUser);
+    localStorage.setItem('uno_player_avatar', url);
+  };
+
   const handleCreateRoom = async (name: string) => {
     const newRoomId = Math.floor(1000 + Math.random() * 9000).toString();
-    const newPlayer: Player = { id: user!.id, name, hand: [], isUno: false, ready: true };
+    const newPlayer: Player = { id: user!.id, name, avatarUrl: user!.avatarUrl, hand: [], isUno: false, ready: true };
     
     const initialState: GameState = {
       roomId: newRoomId,
@@ -63,16 +71,15 @@ const App: React.FC = () => {
       winner: null,
       pendingDraw: 0,
       activeColor: null,
-      logs: [`${name} created the room!`]
+      logs: [`✨ ${name} created match ${newRoomId}`]
     };
 
     try {
       await setDoc(doc(db, 'rooms', newRoomId), initialState);
       setRoomId(newRoomId);
       localStorage.setItem('uno_player_name', name);
-      setUser(prev => prev ? { ...prev, name } : null);
     } catch (err) {
-      setError('Failed to create room. Check Firebase setup.');
+      setError('Connection failed');
     }
   };
 
@@ -83,43 +90,35 @@ const App: React.FC = () => {
     if (docSnap.exists()) {
       const data = docSnap.data() as GameState;
       if (data.status !== 'lobby') {
-        setError('Game already in progress');
+        setError('Match in progress');
         return;
       }
       if (data.players.length >= 6) {
-        setError('Room full');
+        setError('Match full');
         return;
       }
 
-      const newPlayer: Player = { id: user!.id, name, hand: [], isUno: false, ready: true };
+      const newPlayer: Player = { id: user!.id, name, avatarUrl: user!.avatarUrl, hand: [], isUno: false, ready: true };
       await updateDoc(roomRef, {
         players: [...data.players, newPlayer],
-        logs: [...data.logs, `${name} joined!`]
+        logs: [...data.logs, `👋 ${name} joined`]
       });
       setRoomId(code);
       localStorage.setItem('uno_player_name', name);
-      setUser(prev => prev ? { ...prev, name } : null);
     } else {
-      setError('Invalid room code');
+      setError('Invalid code');
     }
   };
 
   const startGame = async () => {
     if (!gameState || !roomId) return;
-    
     const deck = createFullDeck();
     const players = [...gameState.players];
-    
-    // Deal 7 cards each
-    players.forEach(p => {
-      p.hand = deck.splice(0, 7);
-      p.isUno = false;
-    });
+    players.forEach(p => { p.hand = deck.splice(0, 7); p.isUno = false; });
 
-    // Top card
     let topCard = deck.pop()!;
-    // Ensure top card isn't wild for start (standard rule simplified)
-    while (topCard.color === 'wild') {
+    const numericValues = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    while (!numericValues.includes(topCard.value) || topCard.color === 'wild') {
       deck.unshift(topCard);
       topCard = deck.pop()!;
     }
@@ -130,57 +129,42 @@ const App: React.FC = () => {
       drawPile: deck,
       currentCard: topCard,
       discardPile: [topCard],
-      logs: [...gameState.logs, 'The game has started!']
+      logs: [...gameState.logs, '🚀 Game Started! Initial card is ' + topCard.color + ' ' + topCard.value]
     });
   };
 
   const playCard = async (cardIndex: number, pickedColor?: CardColor) => {
     if (!gameState || !roomId || !user) return;
-    
     const currentPlayer = gameState.players[gameState.turnIndex];
     if (currentPlayer.id !== user.id) return;
 
     const card = currentPlayer.hand[cardIndex];
-    if (!canPlayCard(card, gameState.currentCard, gameState.activeColor)) return;
+    if (!canPlayCard(card, gameState.currentCard, gameState.activeColor, gameState.pendingDraw)) return;
 
     let newPlayers = [...gameState.players];
-    const playerInList = newPlayers[gameState.turnIndex];
-    playerInList.hand.splice(cardIndex, 1);
-    
-    // Reset UNO if they didn't click it and they should have?
-    // Simplified: player must click UNO button *before* or *during* their play if they will have 1 card.
+    newPlayers[gameState.turnIndex].hand.splice(cardIndex, 1);
     
     let nextTurn = gameState.turnIndex;
     let nextDirection = gameState.direction;
     let nextPendingDraw = gameState.pendingDraw;
-    let newLogs = [...gameState.logs, `${user.name} played ${card.color} ${card.value}`];
+    let newLogs = [...gameState.logs, `🃏 ${user.name} played ${card.color} ${card.value}`];
 
-    // Card effects
     if (card.value === 'skip') {
       nextTurn = getNextTurnIndex(nextTurn, newPlayers.length, nextDirection);
     } else if (card.value === 'reverse') {
       if (newPlayers.length === 2) {
         nextTurn = getNextTurnIndex(nextTurn, newPlayers.length, nextDirection);
       } else {
-        nextDirection *= -1;
+        nextDirection = (nextDirection === 1 ? -1 : 1) as 1 | -1;
       }
-    } else if (card.value === 'draw2') {
-      nextPendingDraw += 2;
-    } else if (card.value === 'draw4') {
-      nextPendingDraw += 4;
-    }
+    } else if (card.value === 'draw2') nextPendingDraw += 2;
+    else if (card.value === 'draw4') nextPendingDraw += 4;
 
-    // Win condition
-    if (playerInList.hand.length === 0) {
-      await updateDoc(doc(db, 'rooms', roomId), {
-        status: 'ended',
-        winner: user.name,
-        logs: [...newLogs, `${user.name} WINS!`]
-      });
+    if (newPlayers[gameState.turnIndex].hand.length === 0) {
+      await updateDoc(doc(db, 'rooms', roomId), { status: 'ended', winner: user.name });
       return;
     }
 
-    // Move turn
     nextTurn = getNextTurnIndex(nextTurn, newPlayers.length, nextDirection);
 
     await updateDoc(doc(db, 'rooms', roomId), {
@@ -190,7 +174,7 @@ const App: React.FC = () => {
       turnIndex: nextTurn,
       direction: nextDirection,
       pendingDraw: nextPendingDraw,
-      activeColor: card.color === 'wild' ? pickedColor : null,
+      activeColor: (card.color === 'wild' || card.value === 'draw4') ? pickedColor : null,
       logs: newLogs
     });
   };
@@ -204,7 +188,6 @@ const App: React.FC = () => {
     let newDrawPile = [...gameState.drawPile];
     let newDiscardPile = [...gameState.discardPile];
 
-    // Reshuffle discard if draw empty
     if (newDrawPile.length <= Math.max(1, gameState.pendingDraw)) {
       const top = newDiscardPile.shift()!;
       newDrawPile = shuffle([...newDiscardPile]);
@@ -212,9 +195,8 @@ const App: React.FC = () => {
     }
 
     const cardsToDrawCount = gameState.pendingDraw || 1;
-    const drawnCards = newDrawPile.splice(0, cardsToDrawCount);
-    newPlayers[gameState.turnIndex].hand.push(...drawnCards);
-    newPlayers[gameState.turnIndex].isUno = false; // Reset Uno status if they draw
+    newPlayers[gameState.turnIndex].hand.push(...newDrawPile.splice(0, cardsToDrawCount));
+    newPlayers[gameState.turnIndex].isUno = false;
 
     const nextTurn = getNextTurnIndex(gameState.turnIndex, newPlayers.length, gameState.direction);
 
@@ -224,43 +206,56 @@ const App: React.FC = () => {
       discardPile: newDiscardPile,
       pendingDraw: 0,
       turnIndex: nextTurn,
-      logs: [...gameState.logs, `${user.name} drew ${cardsToDrawCount} card(s)`]
+      logs: [...gameState.logs, `📥 ${user.name} drew ${cardsToDrawCount}`]
     });
   };
 
   const handleUno = async () => {
     if (!gameState || !roomId || !user) return;
-    const playerIdx = gameState.players.findIndex(p => p.id === user.id);
-    if (playerIdx === -1) return;
-
+    const idx = gameState.players.findIndex(p => p.id === user.id);
     const newPlayers = [...gameState.players];
-    newPlayers[playerIdx].isUno = true;
-
-    await updateDoc(doc(db, 'rooms', roomId), {
-      players: newPlayers,
-      logs: [...gameState.logs, `${user.name} shouted UNO!`]
-    });
+    newPlayers[idx].isUno = true;
+    await updateDoc(doc(db, 'rooms', roomId), { players: newPlayers, logs: [...gameState.logs, `📣 ${user.name} UNO!`] });
   };
 
-  if (!user) return <div className="flex h-screen items-center justify-center">Loading profile...</div>;
+  if (!user) return null;
+
+  if (!hasStarted) {
+    return (
+      <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-slate-900">
+        <div className="absolute inset-0 bg-gradient-to-tr from-rose-500/20 to-blue-500/20 pointer-events-none"></div>
+        <h1 className="text-8xl uno-font text-red-600 drop-shadow-[0_0_30px_rgba(220,38,38,0.5)] mb-12 animate-pulse">UNO</h1>
+        <button 
+          onClick={() => setHasStarted(true)}
+          className="group relative px-12 py-6 bg-white rounded-full overflow-hidden transition-all hover:scale-110 active:scale-95 shadow-[0_0_40px_rgba(255,255,255,0.3)]"
+        >
+          <div className="absolute inset-0 bg-gradient-to-r from-red-500 to-orange-500 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+          <span className="relative text-2xl font-black text-slate-900 group-hover:text-white uppercase tracking-[0.2em]">Enter Wave Station</span>
+        </button>
+        <p className="mt-8 text-white/40 font-black uppercase tracking-widest text-xs">Unlock Audio & Visuals</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen p-4 md:p-8 flex flex-col items-center justify-start bg-slate-900 overflow-x-hidden">
-      <header className="mb-8 flex flex-col items-center">
-        <h1 className="text-6xl uno-font text-red-600 drop-shadow-[0_2px_10px_rgba(0,0,0,0.5)] select-none">UNO</h1>
-        <p className="text-slate-400 font-semibold tracking-widest mt-2 uppercase text-xs">Multiplayer Pro</p>
+    <div className="min-h-screen w-screen flex flex-col items-center justify-start overflow-hidden relative">
+      <header className="fixed top-4 left-1/2 -translate-x-1/2 flex flex-col items-center z-50">
+        <h1 className="text-4xl uno-font text-red-600 drop-shadow-lg select-none">UNO</h1>
+        <p className="text-white font-black tracking-widest uppercase text-[10px] opacity-80">World Pro</p>
       </header>
 
       {error && (
-        <div className="fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-xl z-50 animate-bounce">
-          {error}
-          <button onClick={() => setError(null)} className="ml-4 font-bold">X</button>
+        <div className="fixed top-8 right-8 bg-red-600/90 text-white px-6 py-3 rounded-2xl shadow-2xl z-[100] animate-bounce flex items-center border-2 border-white/20">
+          <span className="font-bold text-sm">{error}</span>
+          <button onClick={() => setError(null)} className="ml-4">✕</button>
         </div>
       )}
 
       {!roomId ? (
         <Lobby 
           userName={user.name} 
+          currentAvatar={user.avatarUrl}
+          onAvatarChange={handleAvatarChange}
           onCreate={handleCreateRoom} 
           onJoin={handleJoinRoom} 
         />
@@ -274,14 +269,9 @@ const App: React.FC = () => {
           onUno={handleUno}
           onLeave={() => { setRoomId(null); setGameState(null); }}
         />
-      ) : (
-        <div className="flex items-center space-x-2">
-          <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
-          <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse delay-75"></div>
-          <div className="w-4 h-4 bg-yellow-500 rounded-full animate-pulse delay-150"></div>
-          <span className="ml-2 font-bold text-slate-400">Connecting to server...</span>
-        </div>
-      )}
+      ) : null}
+
+      <MusicPlayer autoPlay={true} />
     </div>
   );
 };

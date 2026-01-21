@@ -1,4 +1,3 @@
-
 export type CardColor = 'red' | 'blue' | 'green' | 'yellow' | 'wild';
 export type CardValue = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | 'skip' | 'reverse' | 'draw2' | 'draw4' | 'wild';
 
@@ -11,6 +10,7 @@ export interface Card {
 export interface Player {
   id: string;
   name: string;
+  avatarUrl: string;
   hand: Card[];
   isUno: boolean;
   ready: boolean;
